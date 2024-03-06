@@ -1,0 +1,93 @@
+---
+title: "assignment"
+author: "Catherine Rohner"
+date: "2024-03-01"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub) # to fetch genomes, annotations, etc.
+  library(ensembldb)     # to manipulate ensembl gene annotations
+  library(GenomicRanges) # data structure for genomic ranges 
+  library(epiwraps)      # visualization
+})
+```
+
+1. Using AnnotationHub, find and download the following annotations data:
+
+The mouse (Mus Musculus) EnsDb object, version 102, genome build GRCm38
+
+```{r}
+ah <- AnnotationHub()
+# Query for these Attributes in the AH database
+q <- query(ah, c("Mus Musculus", "EnsDb", "GRCm38"))
+q
+#Solution: AH89211
+
+# Download that Data
+ensdb <- ah[["AH89211"]]
+ensdb
+```
+
+The mouse genome sequence ( dna_sm ) in TwoBit/2bit format for GRCm38
+
+```{r}
+ah <- AnnotationHub()
+# Query for these Attributes in the AH database
+q <- query(ah, c("Mus Musculus", "dna_sm", "GRCm38", "2bit"))
+q
+#Solution: AH88477
+
+# Download that Data
+ensdb2 <- ah[["AH88477"]]
+ensdb2
+```
+
+The drosophila melanogaster genome sequence ( dna_sm ) in TwoBit/2bit format for BDGP6
+
+```{r}
+ah <- AnnotationHub()
+# Query for these Attributes in the AH database
+q <- query(ah, c("drosophila melanogaster", "dna_sm", "BDGP6", "2bit"))
+q
+#Solution: AH106160
+
+# Download that Data
+ensdb3 <- ah[["AH106160"]]
+ensdb3
+```
+
+2. Using the mouse EnsDb, find the following:
+How many different ensembl gene IDs and gene symbols are there for protein-coding genes?
+```{r}
+g <- genes(ensdb)
+head(g)
+pcg <- g[g$gene_biotype == "protein_coding"]
+uid <- unique(pcg$gene_id)
+us <- unique(pcg$symbol)
+
+length(uid)
+#Solution gene ID: 22287
+
+length(us)
+#Solution Symbol: 21964
+```
+
+Plot the distribution of the (spliced) length of protein-coding transcripts
+
+```{r}
+#divide by transcript and filter for protein coding RNA's
+exsPerTx <- exonsBy(ensdb, by = "tx", filter = TxBiotypeFilter("protein_coding"))
+
+#group the exons and summurize their widths
+splicedLengths <- sapply(exsPerTx, function(exon_group) {
+  sum(width(exon_group))
+})
+
+#create histogram
+hist(splicedLengths, breaks = 100, main = "Distribution of Spliced Lengths of Protein-Coding Transcripts", xlab = "Spliced Length (bp)", xlim = c(0, 30000), ylim = c(0,40000))
+
+```
+
+
