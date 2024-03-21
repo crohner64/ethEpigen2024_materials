@@ -1,0 +1,57 @@
+---
+title: "assingment"
+author: "Catherine Rohner"
+date: "2024-03-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(rtracklayer)
+  library(epiwraps)
+  library(GenomicRanges)
+})
+ah <- AnnotationHub()
+```
+
+Download all peaks from Mus musculus strain Bruce4 ES-Bruce4
+
+```{r}
+p300 <- rtracklayer::import("/Users/catherinerohner/ETH/Bioinformatics/ENCFF653YVR.bed", format="narrowPeak")
+H3K4me3 <- rtracklayer::import("/Users/catherinerohner/ETH/Bioinformatics/ENCFF247GVM.bed", format="narrowPeak")
+H3K4me1 <- rtracklayer::import("/Users/catherinerohner/ETH/Bioinformatics/ENCFF333IJH.bed", format="narrowPeak")
+H3K27ac <- rtracklayer::import("/Users/catherinerohner/ETH/Bioinformatics/ENCFF360VIS.bed", format="narrowPeak")
+H3K27me3 <- rtracklayer::import("/Users/catherinerohner/ETH/Bioinformatics/ENCFF008XKX.bed", format="narrowPeak")
+```
+
+Create a Function to calculate the proportion
+
+```{r}
+calculate_overlap_proportion <- function(p300, histone_mark) {
+  overlaps <- findOverlaps(p300, histone_mark)
+  proportion <- length(unique(queryHits(overlaps))) / length(p300)
+  return(proportion)
+}
+```
+
+Call out Function for all Histone Marks
+
+```{r}
+proportion_H3K4me3 <- calculate_overlap_proportion(p300, H3K4me3)
+proportion_H3K4me1 <- calculate_overlap_proportion(p300, H3K4me1)
+proportion_H3K27ac <- calculate_overlap_proportion(p300, H3K27ac)
+proportion_H3K27me3 <- calculate_overlap_proportion(p300, H3K27me3)
+
+print(proportion_H3K4me3)
+print(proportion_H3K4me1)
+print(proportion_H3K27ac)
+print(proportion_H3K27me3)
+```
+Discussion: the large overlap in the H3K27ac histone modification shows a strong association to the p300 Transcription Factor. As H3K27ac is a mark for enhancers and promotors, this indicates that p300 has a role in transcriptional activation.
+
+
