@@ -1,0 +1,81 @@
+---
+title: "assignment"
+author: "Catherine Rohner"
+date: "2024-04-18"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(motifmatchr) # for scanning sequences for matches of given motifs
+  library(Biostrings) # for handling sequences
+  library(MotifDb) # database of motifs
+  library(TFBSTools) # for handling some motif formats
+  library(universalmotif) # for converting motifs to various formats
+  library(PWMEnrich) # for R-based motif enrichment analysis
+  library(rtracklayer)
+})
+```
+
+Import peaks data
+
+```{r}
+peaks <- rtracklayer::import("/Users/catherinerohner/ETH/Bioinformatics/GATA1_mus_musculus.bed", format="narrowPeak")
+seqlevelsStyle(peaks) <- "Ensembl"
+```
+
+Obtain genome sequence from AnnotationHub
+
+```{r}
+ah <- AnnotationHub()
+q <- AnnotationHub::query(ah, c("Mus_musculus", "Ensembl", "GRCm38" ))
+mouse_genome <- ah[["AH88475"]]
+mouse_genome_sqs <- import(mouse_genome)
+```
+
+Retrieve and prepare GATA1 motif
+
+```{r}
+motifs <- query(MotifDb, "GATA1")
+motif <- motifs[["Mmusculus-HOCOMOCOv10-GATA1_MOUSE.H10MO.A"]]
+Biostrings::writeXStringSet(mouse_genome_sqs, "genome.fa")
+motif_pwm <- convert_motifs(motif, class="TFBSTools-PWMatrix")
+```
+
+Match motifs within the genome and peaks
+
+```{r}
+genome_motifs <- motifmatchr::matchMotifs(motif_pwm, subject=mouse_genome_sqs, out="positions")[[1]]
+
+peaks_motifs <- motifmatchr::matchMotifs(motif_pwm, subject=peaks, genome=mouse_genome_sqs, out="positions")
+```
+
+Question 1: Proportion of peaks containing the motif
+
+```{r}
+num_peaks_with_motif <- length(unique(queryHits(findOverlaps(peaks, peaks_motifs, type = "within"))))
+total_peaks <- length(peaks)
+proportion_peaks_with_motif <- num_peaks_with_motif / total_peaks * 100
+cat(sprintf("Of the %d peaks, %d (%.2f%%) contain a motif.\n", total_peaks, num_peaks_with_motif, proportion_peaks_with_motif))
+```
+
+Question 2: Proportion of motif instances overlapping with peaks
+
+```{r}
+names(genome_motifs) <- names(mouse_genome_sqs)
+genome_motifs <- as(genome_motifs, "GRanges")
+head(genome_motifs)
+```
+
+
+```{r}
+motifs_in_peaks <- overlapsAny(genome_motifs, peaks)
+num_motif_in_peaks <- sum(motifs_in_peaks)
+total_motifs <- length(genome_motifs)
+proportion_motif_in_peaks <- num_motif_in_peaks / total_motifs * 100
+cat(sprintf("Of the %d motif instances, %d (%.2f%%) overlap a peak.\n", total_motifs, num_motif_in_peaks, proportion_motif_in_peaks))
+```
+
