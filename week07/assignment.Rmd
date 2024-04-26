@@ -43,10 +43,10 @@ bam <- "atac.chr19.bam"
 ```{r}
 # Generate tracks
 bam2bw(bam, output_bw = "NF_cuts.bw", paired=TRUE, binWidth=1L, type="ends", extend=2L, minFragLength=30, 
-       maxFragLength=120, shift=c(4L,-5L))
+       maxFragLength=120, shift=c(4L,-5L), forceSeqlevelsStyle = "Ensembl")
 
 bam2bw(bam, output_bw = "mono_centers.bw", paired=TRUE, binWidth=5L, minFragLength=140, shift=c(4L,-5L), 
-       maxFragLength=220, type="center", extend=10L)
+       maxFragLength=220, type="center", extend=10L, forceSeqlevelsStyle = "Ensembl")
 ```
 
 
@@ -74,19 +74,17 @@ maz_moi <- as(setNames(m_moi,names(chr19)), "GRanges")
 ```{r}
 # Prepare the list of tracks
 tracks <- c("NF cuts"="NF_cuts.bw", "Mono centers"="mono_centers.bw")
-
-seqlevelsStyle(klf4_moi) <- "Ensembl" 
-seqlevelsStyle(maz_moi) <- "Ensembl" 
 ```
 
 
 ```{r, fig.width=8, fig.height=4}
 # Plot function
 plot_motif_data <- function(motif_moi, tracks, factor_name) {
-  sm <- signal2Matrix(tracks, klf4_moi, w=5, extend=300)
+  sm <- signal2Matrix(tracks, motif_moi, w=5, extend=300)
+  plotEnrichedHeatmaps(sm, trim=0.95, use_raster = FALSE)
   nf <- getNormFactors(tracks, useSeqLevels="19", nwind=5000L)
   sm <- renormalizeSignalMatrices(sm, scaleFactors = nf)
-  plotEnrichedHeatmaps(sm, trim=0.95,use_raster = FALSE, main=paste("Signal around", factor_name, "motifs"))
+  plotEnrichedHeatmaps(sm, trim=0.95,use_raster = FALSE, minRowVal = 12, colors = c("white","darkred"))
 }
 
 # Plot data for KLF4
