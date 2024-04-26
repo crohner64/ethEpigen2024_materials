@@ -1,0 +1,97 @@
+---
+title: "assignment7"
+author: "Catherine Rohner"
+date: "2024-04-26"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(AnnotationHub)
+  library(MotifDb)
+  library(memes)
+  library(universalmotif)
+  library(ensembldb)
+  library(ggplot2)
+  library(Rsamtools)
+  library(GenomicRanges)
+})
+```
+
+
+```{r}
+ah <- AnnotationHub(localHub=TRUE)
+ensdb <- ah[["AH89211"]]
+```
+
+
+```{r, eval=FALSE}
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam", "atac.chr19.bam")
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam.bai", "atac.chr19.bam.bai")
+download.file("https://ethz-ins.org/content/w7/w7_bw.zip", "w7_bw.zip")
+unzip("w7_bw.zip")
+```
+```{r}
+bam <- "atac.chr19.bam"
+
+# Correct path to the BAM file
+#bamFile <- "/Users/catherinerohner/ETH/Bioinformatics/atac.chr19.bam"
+
+```
+
+```{r}
+# Generate tracks
+bam2bw(bam, output_bw = "NF_cuts.bw", paired=TRUE, binWidth=1L, type="ends", extend=2L, minFragLength=30, 
+       maxFragLength=120, shift=c(4L,-5L))
+
+bam2bw(bam, output_bw = "mono_centers.bw", paired=TRUE, binWidth=5L, minFragLength=140, shift=c(4L,-5L), 
+       maxFragLength=220, type="center", extend=10L)
+```
+
+
+```{r}
+# Retrieve motifs for KLF4 and MAZ
+klf4_motif <- MotifDb::query(MotifDb, c("KLF4", "Mus"))[[1]]
+maz_motif <- MotifDb::query(MotifDb, c("MAZ", "Mus"))[[1]]
+
+# Convert motifs
+klf4_motif2 <- convert_motifs(klf4_motif, class="TFBSTools-PFMatrix")
+maz_motif2 <- convert_motifs(maz_motif, class="TFBSTools-PFMatrix")
+
+# Load genome and find motif matches
+genome <- ah[["AH68356"]]  
+chr19 <- import(genome)["19"]
+
+# find motif matches across chr19
+k_moi <- motifmatchr::matchMotifs(klf4_motif2, chr19, out="positions", p.cutoff=1e-5)[[1]]
+klf4_moi <- as(setNames(k_moi,names(chr19)), "GRanges")
+
+m_moi <- motifmatchr::matchMotifs(maz_motif2, chr19, out="positions", p.cutoff=1e-5)[[1]]
+maz_moi <- as(setNames(m_moi,names(chr19)), "GRanges")
+```
+
+```{r}
+# Prepare the list of tracks
+tracks <- c("NF cuts"="NF_cuts.bw", "Mono centers"="mono_centers.bw")
+
+seqlevelsStyle(klf4_moi) <- "Ensembl" 
+seqlevelsStyle(maz_moi) <- "Ensembl" 
+```
+
+
+```{r, fig.width=8, fig.height=4}
+# Plot function
+plot_motif_data <- function(motif_moi, tracks, factor_name) {
+  sm <- signal2Matrix(tracks, klf4_moi, w=5, extend=300)
+  nf <- getNormFactors(tracks, useSeqLevels="19", nwind=5000L)
+  sm <- renormalizeSignalMatrices(sm, scaleFactors = nf)
+  plotEnrichedHeatmaps(sm, trim=0.95,use_raster = FALSE, main=paste("Signal around", factor_name, "motifs"))
+}
+
+# Plot data for KLF4
+plot_motif_data(klf4_moi, tracks, "KLF4")
+
+# Plot data for MAZ
+plot_motif_data(maz_moi, tracks, "MAZ")
+```
