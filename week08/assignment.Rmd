@@ -1,0 +1,144 @@
+---
+title: "assignment"
+author: "Catherine Rohner"
+date: "2024-05-02"
+output: html_document
+---
+
+```{r}
+setwd("/Users/catherinerohner/ETH/Bioinformatics/Homework8")
+getwd()
+```
+
+
+```{r}
+# Load required libraries
+library(SummarizedExperiment)
+library(chromVAR)
+library(MotifDb)
+library(GenomicRanges)
+library(limma)
+library(ggplot2)
+library(motifmatchr)
+library(AnnotationHub)
+library(universalmotif)
+library(epiwraps)
+library(sechm) # for plotting heatmaps from a SummrizedExperiment
+library(BiocParallel) # for multithreading
+library(BSgenome)
+library(Biostrings)
+library(memes)
+library(EnrichedHeatmap)
+```
+
+
+```{r}
+genome <- BSgenome.Mmusculus.UCSC.mm10::BSgenome.Mmusculus.UCSC.mm10
+seqlevelsStyle(genome) <- "Ensembl"
+```
+
+
+```{r}
+# Download the data
+download.file("https://ethz-ins.org/content/mouse_mm38_hippocampus.peakCounts.SE.rds", 
+              "mouse_mm38_hippocampus.peakCounts.SE.rds", mode = "wb")
+se <- readRDS("mouse_mm38_hippocampus.peakCounts.SE.rds")
+se
+```
+
+
+```{r}
+# Retrieve motifs
+motifs <- MotifDb::query(MotifDb, "Mmusculus")
+# If you need a specific motif like GATA1
+motifs <- motifs[grep("GATA1", names(motifs))]
+motifs
+```
+
+
+```{r}
+# Prepare motifs for chromVAR
+converted_motifs <- convert_motifs(motifs, class="TFBSTools-PFMatrix")[[1]]
+converted_motifs
+
+# Match motifs in the peaks and find motif matches across chr19
+# You are matching motifs against the chromosome data
+moi <- motifmatchr::matchMotifs(converted_motifs, chr19)
+```
+```{r}
+# get the peaks
+se <- chromVAR::addGCBias(se, genome=genome)
+head(assay(se))
+```
+
+```{r}
+# Calculate deviations and variability
+set.seed(1234)
+
+bg <- chromVAR::getBackgroundPeaks(se, niterations=1000)
+dev <- chromVAR::computeDeviations(object=se, annotations=moi, background_peaks=bg) 
+```
+
+
+```{r}
+# Set up the conditions in the metadata if not already
+colData(se)$condition <- factor(c("CTRL","CTRL","CTRL","CTRL","CTRL","CTRL","FSS","FSS","FSS","FSS","FSS", "FSS")) 
+colData(se)$gender <- factor(c("Female","Female","Female","Male","Male","Male","Female","Female","Female","Male","Male","Male")) 
+
+dev$condition
+dev$condition <- factor(dev$condition)
+dev$condition
+dev$condition <- relevel(dev$condition, "CTRL")
+
+dev$gender
+dev$gender
+dev$gender <- factor(dev$gender)
+dev$gender
+dev$gender <- relevel(dev$gender, "Female")
+
+# Stress condition differential analysis
+design_stress <- model.matrix(~ condition, data = colData(dev))
+fit_stress <- limma::eBayes(limma::lmFit(object = assays(dev)$z, design = design_stress))
+results_stress <- as.data.frame(limma::topTable(fit_stress, coef="conditionFSS", number = Inf))
+
+# Gender differential analysis
+design_gender <- model.matrix(~ gender, data = colData(dev))
+fit_gender <- limma::eBayes(limma::lmFit(object = assays(dev)$z, design = design_gender))
+results_gender <- as.data.frame(limma::topTable(fit_gender, coef="genderFemale", number = Inf))
+```
+
+
+```{r}
+# Visualize the top motifs for stress condition with a HeatMap
+top_motifs_indices <- match(head(results_stress$geneSymbol, 10), names(motifs))
+top_motifs <- motifs[top_motifs_indices]
+normalized_matrix <- normalizeToMatrix(assays(se)$counts, regions = moi, extend = 5000, value_column = "counts")
+
+# Define color breaks and palette for the heatmap
+breaks <- seq(min(normalized_matrix), max(normalized_matrix), length.out = 100)
+heatmap_colors <- colorRamp2(breaks, viridis::viridis(100))
+
+# Create the heatmap stress
+heatmap <- EnrichedHeatmap(normalized_matrix,
+                           name = "Stress condition",
+                           col = heatmap_colors,
+                           top_annotation = HeatmapAnnotation(df = data.frame(condition = colData(se)$condition)))
+
+# Draw the heatmap stress
+draw(heatmap, heatmap_legend_side = "bottom")
+
+# Visualize the top motifs for stress condition with a HeatMap
+top_motifs_indices <- match(head(results_gender$geneSymbol, 10), names(motifs))
+top_motifs <- motifs[top_motifs_indices]
+normalized_matrix <- normalizeToMatrix(assays(se)$counts, regions = moi, extend = 5000, value_column = "counts")
+
+# Create the heatmap gender
+heatmap <- EnrichedHeatmap(normalized_matrix,
+                           name = "Stress condition",
+                           col = heatmap_colors,
+                           top_annotation = HeatmapAnnotation(df = data.frame(condition = colData(se)$condition)))
+
+# Draw the heatmap gender
+draw(heatmap, heatmap_legend_side = "bottom")
+```
+
