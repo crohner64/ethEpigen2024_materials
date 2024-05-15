@@ -1,0 +1,142 @@
+---
+title: "assignment"
+author: "Catherine Rohner"
+date: "2024-05-14"
+output: html_document
+---
+
+## Load the Packages
+
+```{r}
+library(GenomicRanges)
+library(rtracklayer)
+library(epiwraps)
+library(ggplot2)
+library(rGREAT) # Gene Ontology enrichment among genomic regions
+```
+
+## Download the Data
+```{r}
+setwd("/Users/catherinerohner/ETH/Bioinformatics/Assignment10")
+download.file("https://ethz-ins.org/content/w10.assignment.zip", "w10.assignment.zip")
+unzip("w10.assignment.zip")
+list.files()
+```
+## Filter and import high-confidence peaks to define regions for analysis. Load corresponding signal tracks.
+
+```{r}
+peaks <- list.files(pattern="bed$")
+# we first import the peaks
+peaks <- lapply(peaks, rtracklayer::import.bed)
+# we'll focus on the high-quality peaks
+peaks <- lapply(peaks, FUN=function(x) x[x$score>800])
+# we get the union of non-redundant regions
+regions <- reduce(unlist(GRangesList(peaks)))
+#l load tracks
+tracks <- list.files(pattern="bw$")
+```
+
+## Analyze Relationships Between CREB Family Transcription Factors
+
+We utilize enriched heatmaps to examine the binding patterns of CREB1, CREB3, and CREB3L1 across the genomic regions. The initial plots reveal clear signals for all three transcription factors, suggesting strong binding activity. However, the complexity and overlap in data require further organization to better identify and understand the underlying patterns
+
+```{r}
+ese <- signal2Matrix(tracks, regions, extend=2000)
+plotEnrichedHeatmaps(ese, use_raster=FALSE)
+```
+## Find the appropriate number of clusters by analyzing the explained variance for each cluster count from 2 to 10.
+
+The graph illustrates that k-values of 3, 4, and 5 are potential choices for clustering. Based on our discussions in class, it is often advantageous to start with a higher number of clusters (k=5) and then consolidate them if they appear redundant.
+
+```{r}
+cl2 <- clusterSignalMatrices(ese, k=2:10)
+ggplot(cl2$varExplained, aes(k, varExplained)) + geom_line()
+```
+
+
+## Initial Clustering Analysis
+
+We initially segmented the data into five clusters, which explained 74% of the variance. A comparison with four clusters, which accounted for 70% of the variance, shows minimal improvement in variance explanation when increasing to five clusters. This marginal gain suggests that clustering into four groups might be more appropriate. Additionally, clusters 2 and 3 in the five-cluster model contain notably fewer data points, which could indicate overfitting. This observation warrants further analysis to confirm the optimal cluster count.
+
+```{r}
+set.seed(123)  # to ensure that it gives the same results everytime
+cl <- clusterSignalMatrices(ese, k=5)
+table(cl)
+head(cl)
+length(cl)
+length(regions)
+
+rowData(ese)$cluster <- cl
+```
+## Plotting Clustered Data with Enriched Heatmaps 
+
+Upon visualizing the data, Clusters 4 and 5 appear remarkably similar, underscoring our previous observations about diminishing returns when adding more clusters. In line with the strategy discussed in class to merge similar clusters for a clearer and more meaningful analysis, I will proceed by reducing the number of clusters to four. 
+
+```{r}
+plotEnrichedHeatmaps(ese, row_split="cluster", trim=0.99,
+                     colors=c("white","darkred"),use_raster=FALSE)
+```
+## Detailed Clustering for k=4
+
+The heatmap distinctly showcases four clusters, validating the decision to reduce the cluster count. Observations from the heatmap are as follows:
+
+Cluster 1 shows the highest activity for Creb3L1, complemented by substantial signals for both Creb1 and Creb3, indicating a versatile regulatory region.
+Cluster 2 is characterized predominantly by high activity for Creb1, with moderate expression of Creb3L1 and minimal Creb3, suggesting a specific functional emphasis.
+Cluster 3 reveals a balanced high activity for both Creb1 and Creb3L1 but only a minimal presence of Creb3, reflecting a different aspect of regulatory interaction compared to other clusters.
+Cluster 4 displays a notably high signal for Creb3, distinguishing it significantly from the others.
+
+```{r}
+cl <- clusterSignalMatrices(ese, k=4)
+rowData(ese)$cluster <- cl
+table(cl)
+head(cl)
+mycolors <- c("1"="red", "2"="blue", "3"="darkgreen", "4"="black")
+plotEnrichedHeatmaps(ese, row_split="cluster", mean_color=mycolors, colors=c("white","darkred"),use_raster=FALSE)
+```
+
+## Visualizing the average signals across the clusters allows us to confirm specific characteristics:
+
+Cluster 2 and 4 show distinct, strong signals for Creb1 and Creb3, respectively, highlighting their specialized activity profiles.
+Cluster 1 and Cluster 3 initially appear to have similar patterns. However, upon closer examination, it becomes evident that Cluster 3 has a significantly lower peak for Creb3, even though Creb1 and Creb3L1 are more pronounced compared to Cluster 1. This divergence suggests a unique regulatory pattern in Cluster 1 and 3, needing further investigation.***
+
+```{r}
+d <- meltSignals(ese, splitBy=cl)
+rowData(ese)$cluster <- cl
+ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2) + facet_wrap(~split)
+```
+
+## Enhancing Feature Comparison with Relative Scaling
+
+To more accurately compare features across the same scale and identify more distinct patterns, we employ relative signal scaling. This adjustment reveals stark differences between the clusters that were not as apparent with absolute values:
+
+Cluster 1 is characterized by very high peaks in Creb1, indicating a dominant presence of this transcription factor.
+Cluster 3, in contrast, shows high peaks in Creb3L1 with moderate signals for Creb1, highlighting a different regulatory emphasis. Interestingly, while previous analyses suggested that Cluster 1 had the highest signals for Creb3L1, relative scaling shows that Creb1 is actually more prominent.
+
+```{r}
+cl <- clusterSignalMatrices(ese, k=4, scaleRows = TRUE)
+d <- meltSignals(ese, splitBy=cl)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line() + facet_wrap(~split)
+mycolors <- c("1"="red", "2"="blue", "3"="darkgreen", "4"="black")
+plotEnrichedHeatmaps(ese, row_split = cl,mean_color=mycolors, scale_rows = "global",use_raster=FALSE)
+```
+
+## Get the description of the Cluster1.
+
+Looking at the Values we can see that the enrichment analysis highlights a significant involvement of genomic regions in processes related to cell movement, including "locomotion", "regulation of cell motility", "regulation of cell migration" , "regulation of locomotion", and "cell migration". These processes show notable enrichment with genome fractions ranging from approximately 0.0977 to 0.166, and observed region hits from 139 to 206, indicating a strong representation within the analyzed genomic regions. Especially, "cell migration" and "anatomical structure morphogenesis" are among the most enriched processes, with 206 and 299 hits respectively, suggesting these areas as key functions regulated by the genomic regions in this cluster. Fold enrichment values range from about 1.348 to 1.718, underscoring a moderate to strong overrepresentation of these terms relative to the background. The p-values are highly significant, with adjusted p-values ranging from approximately 0.000912 to 0.009, reinforcing the statistical significance of the enrichment.
+
+```{r}
+split_regions <- split(rowRanges(ese), rowData(ese)$cluster)
+
+res <- great(split_regions[["1"]], gene_sets="GO:BP", tss_source="hg38", background=regions, cores=2)
+bp <- getEnrichmentTables(res)
+head(bp)
+```
+## Use ggplot2 to visualize results from enrichment analysis
+
+This visualization effectively highlights our key findings. The most significant results are represented by yellow dots, with the size of each dot correlating to the number of observed hits. Notably, terms like "cellular response to stimulus" and "cell communication" emerge as highly significant, also boasting a substantial number of region hits. This underscores the importance of these biological processes in the regions analyzed. Given that the signal in Cluster 1 was notably high for Creb1—a transcription factor known for its regulatory roles—these findings align well with our expectations and further emphasize the regulatory significance of these genomic regions.
+
+```{r}
+ggplot(head(bp, 15), aes(fold_enrichment, reorder(description, p_adjust), size=observed_region_hits, color=-log10(p_adjust))) +
+  geom_point() + scale_color_viridis_c()
+```
+
