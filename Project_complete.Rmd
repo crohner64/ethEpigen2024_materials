@@ -1,0 +1,1035 @@
+---
+title: "Bioinformatics Semesterproject"
+author: "Catherine Rohner and Ann-Sophie Frind"
+date: "2024-06-11"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true    
+    toc_depth: 2
+bibliography: Quellen.bib
+---
+
+```{r, message=FALSE, warning=FALSE}
+# BiocManager::install(c("DiffBind", "GenomicInteractions"))
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(ensembldb)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(motifmatchr)
+  library(Biostrings)
+  library(MotifDb)
+  library(TFBSTools)
+  library(universalmotif)
+  library(PWMEnrich)
+  library(rtracklayer)
+  library(biomaRt)
+  library(EnrichedHeatmap)
+  library(GenomicAlignments)
+  library(edgeR)
+  library(epiwraps)
+  library(rGREAT)
+  library(knitr)
+  library(kableExtra)
+  library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+  library(ChIPseeker)
+  library(org.Hs.eg.db)
+  library(limma)
+  library(DESeq2)
+  library(csaw)
+  library(sechm)
+  library(GenomicFeatures)
+  library(GenomicInteractions)
+  library(clusterProfiler)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(DiffBind)
+})
+```
+
+# Introduction
+
+Using both Chip-seq and ATAC-seq data, we want to investigate the histone modifications H3K4me1 (histone H3 lysine 4 monomethylation) and H3K9me3 (histone H3 lysine 9 trimethylation) in the tissue of left ventricles. They play essential roles in regulating gene expression, impacting heart development, function, and disease.\
+H3K4me is known to be be related to aging processes in several species. It serves as a marker of active transcription sites. [@H3K4me].
+
+Generally, the literature suggests that men are generally at higher risk of certain cardiovascular diseases than women. Also, the risk generally increases with age. Therefore, we want to see whether we can find differences in the chosen histone modifications between the groups.
+
+CHAT-GPT: The human heart is a vital organ whose function can be significantly influenced by various factors, including age and sex. Epigenetic modifications, such as histone modifications, play a crucial role in regulating gene expression, which in turn affects cardiac function. This project explores the role of specific histone modifications (H3K9me3, H3K4me1, H3K27ac) and transcription factor co-binding patterns in age-related changes in cardiac gene expression, with a particular focus on sex-specific differences. By understanding these epigenetic changes, we aim to uncover mechanisms that contribute to age-related cardiac functional decline and the differences observed between male and female subjects. This study leverages various bioinformatics methods, including differential peak calling, clustering, visualization, gene association, and co-binding analysis, to provide a comprehensive view of the epigenetic landscape in cardiac tissues.
+
+## Data
+
+Our variables will be labeled as short but descriptive as possible containing following information:\
+- Variable of interest\
+- Type of data, e.g. peaks\
+- group, e.g. old male (om), young female (yf)
+
+```{r, eval=FALSE}
+dir.create("data")
+### Old male (73y)
+
+# ATAC: <https://www.encodeproject.org/experiments/ENCSR769DGC/>\
+download.file("https://www.encodeproject.org/files/ENCFF743LDX/@@download/ENCFF743LDX.bed.gz", 
+              destfile = "data/ATACpeak_om") #o = old, m = male
+
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR461MTO/>\
+download.file("https://www.encodeproject.org/files/ENCFF735CIX/@@download/ENCFF735CIX.bed.gz", 
+              destfile = "data/H3K4me1peak_om") #o = old, m = male
+
+# H3K9me3: <https://www.encodeproject.org/experiments/ENCSR843ETK/>\
+download.file("https://www.encodeproject.org/files/ENCFF944MPR/@@download/ENCFF944MPR.bed.gz", 
+              destfile = "data/H3K9me3peak_om") #o = old, m = male
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR402JWL/>\
+download.file("https://www.encodeproject.org/files/ENCFF610WJV/@@download/ENCFF610WJV.bed.gz", 
+              destfile = "data/H3K27acpeak_om") #o = old, m = male
+
+# bam files for differential analysis
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR461MTO/>\
+options(timeout=3600)
+download.file("https://www.encodeproject.org/files/ENCFF230EIS/@@download/ENCFF230EIS.bam", 
+              destfile = "data/H3K4me1bam_om") #o = old, m = male
+H3K4me1bam_om <- BamFile("data/H3K4me1bam_om")
+indexBam(H3K4me1bam_om)
+
+options(timeout=3600)
+# RNA-seq data: <https://www.encodeproject.org/experiments/ENCSR131FDP/>\
+download.file("https://www.encodeproject.org/files/ENCFF417VDK/@@download/ENCFF417VDK.tsv", 
+              destfile = "data/RNA_om") #o = old, m = male (69y)
+RNA_om <- read.table("data/RNA_om", header = TRUE)
+
+options(timeout=3600)
+# CTCF: <https://www.encodeproject.org/experiments/ENCSR578AKX/>\
+download.file("https://www.encodeproject.org/files/ENCFF182MYP/@@download/ENCFF182MYP.bed.gz", 
+              destfile = "data/CTCF_om") #o = old, m = male (73y)
+CTCF_om <- read.table("data/CTCF_om", header = FALSE)
+CTCF_om <- GRanges(seqnames = CTCF_om$V1,
+                   ranges = IRanges(start = CTCF_om$V2, end = CTCF_om$V3))
+
+#________________________________________________________________________________________
+### Young male (34y)
+
+# ATAC (43y): <https://www.encodeproject.org/experiments/ENCSR310RJN/>\
+download.file("https://www.encodeproject.org/files/ENCFF568NPG/@@download/ENCFF568NPG.bed.gz", 
+              destfile = "data/ATACpeak_ym") #y = young, m = male
+
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR111WGZ/>\
+download.file("https://www.encodeproject.org/files/ENCFF569RXT/@@download/ENCFF569RXT.bed.gz", 
+              destfile = "data/H3K4me1peak_ym") #y = young, m = male
+
+# H3K9me3: <https://www.encodeproject.org/experiments/ENCSR176KNR/>\
+download.file("https://www.encodeproject.org/files/ENCFF173FHK/@@download/ENCFF173FHK.bed.gz", 
+              destfile = "data/H3K9me3peak_ym") #y = young, m = male
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR150QXE/>\
+download.file("https://www.encodeproject.org/files/ENCFF094TOI/@@download/ENCFF094TOI.bed.gz", 
+              destfile = "data/H3K27acpeak_ym") #y = young, m = male
+
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR111WGZ/>\
+options(timeout=3600)
+download.file("https://www.encodeproject.org/files/ENCFF018JTV/@@download/ENCFF018JTV.bam", 
+              destfile = "data/H3K4me1bam_ym") #y = young, m = male
+H3K4me1bam_ym <- BamFile("data/H3K4me1bam_ym")
+indexBam(H3K4me1bam_ym)
+
+# RNA-seq data: <https://www.encodeproject.org/experiments/ENCSR924MSZ/>\
+download.file("https://www.encodeproject.org/files/ENCFF311HGE/@@download/ENCFF311HGE.tsv", 
+              destfile = "data/RNA_ym") #y = young, m = male (40y)
+RNA_ym <- read.table("data/RNA_ym", header = TRUE)
+
+# CTCF: <https://www.encodeproject.org/experiments/ENCSR355PMV/>\
+download.file("https://www.encodeproject.org/files/ENCFF641ZTX/@@download/ENCFF641ZTX.bed.gz", 
+              destfile = "data/CTCF_ym") #y = young, m = male (40y)
+CTCF_ym <- read.table("data/CTCF_ym", header = FALSE)
+CTCF_ym <- GRanges(seqnames = CTCF_ym$V1,
+                   ranges = IRanges(start = CTCF_ym$V2, end = CTCF_ym$V3))
+
+# CTCF .bw: <https://www.encodeproject.org/experiments/ENCSR355PMV/>\
+options(timeout=6000)
+download.file("https://www.encodeproject.org/files/ENCFF366NLF/@@download/ENCFF366NLF.bigWig", 
+              destfile = "data/CTCFbw_ym") #y = young, m = male (40y)
+CTCFbw_ym <- read.table("data/CTCFbw_ym", header = FALSE)
+download.file("https://www.encodeproject.org/files/ENCFF366NLF/@@download/ENCFF366NLF.bigWig", 
+              destfile = "CTCFbw_yf") #y = young, f = female (46y)
+CTCFbw_yf <- read.table("CTCFbw_yf", header = FALSE)
+
+# DELETE? CTCF.bed (43y): <https://www.encodeproject.org/experiments/ENCSR355PMV/>\
+download.file("https://www.encodeproject.org/files/ENCFF641ZTX/@@download/ENCFF641ZTX.bed.gz", 
+              destfile = "CTCFbed_ym") #y = young, m = male
+CTCFbed_ym <- read.table("CTCFbed_ym", header = FALSE)
+# Select the first three columns
+CTCFbed_ym_subset <- CTCFbed_ym[, 1:3]
+# Write the selected columns to a new file
+write.table(CTCFbed_ym_subset, file = "CTCFbed_ym_subset.bed", sep = "\t", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+CTCFbed_ym <- GRanges(seqnames = CTCFbed_ym$V1,
+                   ranges = IRanges(start = CTCFbed_ym$V2, end = CTCFbed_ym$V3))
+save(CTCFbed_ym, file = "CTCFbed_ym.RData")
+
+#_______________________________________________________________________________
+### Old female (59y)
+
+# ATAC: <https://www.encodeproject.org/experiments/ENCSR925LGW/>\
+download.file("https://www.encodeproject.org/files/ENCFF947DKR/@@download/ENCFF947DKR.bed.gz", 
+              destfile = "data/ATACpeak_of") #o = old, f = female
+
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR485LPA/>\
+download.file("https://www.encodeproject.org/files/ENCFF463WJH/@@download/ENCFF463WJH.bed.gz", 
+              destfile = "data/H3K4me1peak_of") #o = old, f = female
+
+# H3K9me3: <https://www.encodeproject.org/experiments/ENCSR284DWQ/>\
+download.file("https://www.encodeproject.org/files/ENCFF604IOR/@@download/ENCFF604IOR.bed.gz", 
+              destfile = "data/H3K9me3peak_of") #o = old, f = female
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR884SIF/>\
+download.file("https://www.encodeproject.org/files/ENCFF095OXH/@@download/ENCFF095OXH.bed.gz", 
+              destfile = "data/H3K27acpeak_of") #o = old, f = female
+
+# old female 59y
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR485LPA/>\
+options(timeout=3600)
+download.file("https://www.encodeproject.org/files/ENCFF392MXC/@@download/ENCFF392MXC.bam", 
+              destfile = "data/H3K4me1bam_of") #o = old, f = female
+H3K4me1bam_of <- BamFile("data/H3K4me1bam_of")
+indexBam(H3K4me1bam_of)
+
+# RNA-seq data: <https://www.encodeproject.org/experiments/ENCSR900FUP/>\
+download.file("https://www.encodeproject.org/files/ENCFF408FCD/@@download/ENCFF408FCD.tsv", 
+              destfile = "data/RNA_of") #o = old, f = female (59y)
+RNA_of <- read.table("data/RNA_of", header = TRUE)
+
+# CTCF: <https://www.encodeproject.org/experiments/ENCSR778ZPK/>\
+download.file("https://www.encodeproject.org/files/ENCFF805CXH/@@download/ENCFF805CXH.bed.gz", 
+              destfile = "data/CTCF_of") #o = old, f = female (59y)
+CTCF_of <- read.table("data/CTCF_of", header = FALSE)
+CTCF_of <- GRanges(seqnames = CTCF_of$V1,
+                   ranges = IRanges(start = CTCF_of$V2, end = CTCF_of$V3))
+
+#________________________________________________________________________________________
+### Young female(46y)
+
+# ATAC (47y): <https://www.encodeproject.org/experiments/ENCSR399OSE/>\
+download.file("https://www.encodeproject.org/files/ENCFF056KYH/@@download/ENCFF056KYH.bed.gz", 
+              destfile = "data/ATACpeak_47yf") #y = young, f = female
+
+# ATAC (42y): <https://www.encodeproject.org/experiments/ENCSR593YFB/>\
+download.file("https://www.encodeproject.org/files/ENCFF904QPU/@@download/ENCFF904QPU.bed.gz", 
+              destfile = "data/ATACpeak_42yf") #y = young, f = female
+
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR848BXL/>\
+download.file("https://www.encodeproject.org/files/ENCFF836HMH/@@download/ENCFF836HMH.bed.gz", 
+              destfile = "data/H3K4me1peak_yf") #y = young, f = female, 46
+
+# H3K9me3: <https://www.encodeproject.org/experiments/ENCSR433LHD/>\
+download.file("https://www.encodeproject.org/files/ENCFF144UHV/@@download/ENCFF144UHV.bed.gz", 
+              destfile = "data/H3K9me3peak_yf") #y = young, f = female, 46
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR863BVD/>\
+download.file("https://www.encodeproject.org/files/ENCFF214YFB/@@download/ENCFF214YFB.bed.gz", 
+              destfile = "data/H3K27acpeak_yf") #y = young, f = female, 46
+
+# young female 46y
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR848BXL/>\
+download.file("https://www.encodeproject.org/files/ENCFF708RPB/@@download/ENCFF708RPB.bam", 
+              destfile = "data/H3K4me1bam_yf") #y = young, f = female
+H3K4me1bam_yf <- BamFile("data/H3K4me1bam_yf")
+indexBam(H3K4me1bam_yf)
+
+# RNA-seq data: <https://www.encodeproject.org/experiments/ENCSR837VMK/>\
+download.file("https://www.encodeproject.org/files/ENCFF440HGB/@@download/ENCFF440HGB.tsv", 
+              destfile = "data/RNA_yf") #y = young, f = female (y)
+RNA_yf <- read.table("data/RNA_yf", header = TRUE)
+
+# CTCF: <https://www.encodeproject.org/experiments/ENCSR565HBN/>\
+download.file("https://www.encodeproject.org/files/ENCFF794LOO/@@download/ENCFF794LOO.bed.gz", 
+              destfile = "data/CTCF_yf") #y = young, f = female (46y)
+CTCF_yf <- read.table("data/CTCF_yf", header = FALSE)
+CTCF_yf <- GRanges(seqnames = CTCF_yf$V1,
+                   ranges = IRanges(start = CTCF_yf$V2, end = CTCF_yf$V3))
+
+options(timeout = 6000)
+# CTCF .bw: <https://www.encodeproject.org/experiments/ENCSR565HBN/>\
+download.file("https://www.encodeproject.org/files/ENCFF689OGE/@@download/ENCFF689OGE.bigWig", 
+              destfile = "data/CTCFbw_yf") #y = young, f = female (46y)
+CTCFbw_yf <- read.table("data/CTCFbw_yf", header = FALSE)
+download.file("https://www.encodeproject.org/files/ENCFF689OGE/@@download/ENCFF689OGE.bigWig", 
+              destfile = "CTCFbw_yf") #y = young, f = female (46y)
+CTCFbw_yf <- read.table("CTCFbw_yf", header = FALSE)
+
+# CTCF.bed (46y): <https://www.encodeproject.org/experiments/ENCSR565HBN/>\
+download.file("https://www.encodeproject.org/files/ENCFF794LOO/@@download/ENCFF794LOO.bed.gz", 
+              destfile = "CTCFbed_yf") #y = young, f = female
+CTCFbed_yf <- read.table("CTCFbed_yf", header = FALSE)
+# Select the first three columns
+CTCFbed_yf_subset <- CTCFbed_yf[, 1:3]
+# Write the selected columns to a new file
+write.table(CTCFbed_yf_subset, file = "CTCFbed_yf_subset.bed", sep = "\t", 
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+CTCFbed_yf <- GRanges(seqnames = CTCFbed_yf$V1,
+                   ranges = IRanges(start = CTCFbed_yf$V2, end = CTCFbed_yf$V3))
+
+```
+
+The data for the clustering and visualization part are separate for a better overview.
+
+```{r, eval=FALSE}
+# .bed Data
+## Young Male
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR111WGZ/>\
+download.file("https://www.encodeproject.org/files/ENCFF569RXT/@@download/ENCFF569RXT.bed.gz", 
+              destfile = "data/H3K4me1peak_ym_CV") #y = young, m = male
+
+# H3K27ac 34y: <https://www.encodeproject.org/experiments/ENCSR150QXE/>\
+download.file("https://www.encodeproject.org/files/ENCFF059ERB/@@download/ENCFF059ERB.bed.gz", 
+              destfile = "H3K27acpeak_ym_CV") #y = young, m = male
+
+#________________________________
+## Young Female
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR848BXL/>\
+download.file("https://www.encodeproject.org/files/ENCFF836HMH/@@download/ENCFF836HMH.bed.gz", 
+              destfile = "H3K4me1peak_yf_CV") #y = young, f = female, 46
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR863BVD/>\
+download.file("https://www.encodeproject.org/files/ENCFF214YFB/@@download/ENCFF214YFB.bed.gz", 
+              destfile = "H3K27acpeak_yf_CV") #y = young, f = female, 46
+
+#_______________________________________________________________________________
+
+# .bw Data
+## Young Male
+options(timeout = 6000)
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR111WGZ/>\
+download.file("https://www.encodeproject.org/files/ENCFF202DON/@@download/ENCFF202DON.bigWig", 
+              destfile = "H3K4me1BW_ym.bigWig") #y = young, m = male
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR150QXE/>\
+download.file("https://www.encodeproject.org/files/ENCFF326LWU/@@download/ENCFF326LWU.bigWig", 
+              destfile = "H3K27acBW_ym.bigWig") #y = young, m = male
+
+## Young Female
+# H3K4me1: <https://www.encodeproject.org/experiments/ENCSR848BXL/>\
+download.file("https://www.encodeproject.org/files/ENCFF213UYA/@@download/ENCFF213UYA.bigWig", 
+              destfile = "H3K4me1BW_yf.bigWig") #y = young, f = female, 46
+
+# H3K27ac: <https://www.encodeproject.org/experiments/ENCSR863BVD/>\
+download.file("https://www.encodeproject.org/files/ENCFF094PUR/@@download/ENCFF094PUR.bigWig", 
+              destfile = "H3K27acBW_yf.bigWig") #y = young, f = female, 46
+```
+
+# Analyses
+
+## Differential Peak Calling - H3K9me3
+
+In this first section we compare peak data between age groups (young vs. old) and between sexes (male vs. female) to identify differential binding patterns. We start with the prevalence of **H3K9me3 peaks** in regions associated with cardiac muscle contraction genes. It is expected to be **higher in older individuals** leading to repressive chromatin states and potentially reduced expression of these genes.This differential repressive binding might contribute to the age-related cardiac functional decline.\
+H3K9me3 is a histone modification that can lead to a more tight binding of the DNA to the histone complex. This can be translated into the formation of heterochromatin. During aging, heterochromatin overall decreases. However, so called 'senescence-associated heterochromatin foci (SAHF)' increase in order to silence genes that promote cell division [@HeterochromatinH3K9me3]. Similarly to that, we want to see whether regions that are associated with cardiac muscle contraction genes are also silenced by H3K9me3. If that is the case, people of older age should have more H3K9me in those regions contributing to the higher risk of heart diseases in elderly people.\
+
+### Methods
+
+Using the Gene Ontology Browser we could identify our genes of interest - the genes for cardiac muscle contraction and other heart-realted processes.
+
+```{r, message=FALSE, , warning=FALSE}
+# Get genome for GRanges object of cardiac genes later
+ah <- AnnotationHub()
+
+q <- AnnotationHub::query(ah, c("ENSEMBL", "Homo sapiens", "EnsDb", "GRCh38")) 
+# apparently hg38 and GRCh38 are the same thing
+# q
+ensdb <- ah[["AH116291"]]
+genes <- genes(ensdb)
+
+seqlevelsStyle(genes) <- "UCSC"
+
+# Use biomaRt to find genes associated with cardiac muscle contraction
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# Query genes associated with cardiac muscle contraction
+cardiac_genes <- getBM(
+    attributes = c("ensembl_gene_id", "external_gene_name", "description"),
+    filters = "go", 
+    values = c("GO:0060048", "GO:0003015", "GO:0007507"),  #GO term for cardiac 
+    # muscle contraction @GOheartdevelopment: 0060048, heart processes: 0003015, 
+    # general heart development: 0007507
+    mart = mart)
+
+# Extract the Ensembl gene IDs
+ensembl_gene_ids <- cardiac_genes$ensembl_gene_id
+
+# Find the corresponding genomic ranges in the EnsDb database
+cardiac_granges <- genes[genes$gene_id %in% ensembl_gene_ids]
+```
+
+[@GOheartdevelopment] As a next step, we overlap these genes with the peaks of the histone modification H3K9me3. That will give us an indication about their potential chromatin state.
+
+```{r, message=FALSE, warning=FALSE}
+# load the data
+H3K9me3peak_ym <- read.table("data/H3K9me3peak_ym", header = FALSE)
+H3K9me3peak_ym <- GRanges(seqnames = H3K9me3peak_ym$V1,
+                   ranges = IRanges(start = H3K9me3peak_ym$V2, end = H3K9me3peak_ym$V3))
+seqlevelsStyle(H3K9me3peak_ym) <- "UCSC"
+
+H3K9me3peak_yf <- read.table("data/H3K9me3peak_yf", header = FALSE)
+H3K9me3peak_yf <- GRanges(seqnames = H3K9me3peak_yf$V1,
+                   ranges = IRanges(start = H3K9me3peak_yf$V2, end = H3K9me3peak_yf$V3))
+
+H3K9me3peak_om <- read.table("data/H3K9me3peak_om", header = FALSE)
+H3K9me3peak_om <- GRanges(seqnames = H3K9me3peak_om$V1,
+                   ranges = IRanges(start = H3K9me3peak_om$V2, end = H3K9me3peak_om$V3))
+
+H3K9me3peak_of <- read.table("data/H3K9me3peak_of", header = FALSE)
+H3K9me3peak_of <- GRanges(seqnames = H3K9me3peak_of$V1,
+                   ranges = IRanges(start = H3K9me3peak_of$V2, end = H3K9me3peak_of$V3))
+```
+
+```{r, message=FALSE, warning=FALSE}
+# young male
+length(cardiac_granges)
+overlaps_heart_H3K9me3_ym <- sum(overlapsAny(cardiac_granges, H3K9me3peak_ym))
+# young female
+overlaps_heart_H3K9me3_yf <- sum(overlapsAny(cardiac_granges, H3K9me3peak_yf))
+# old male
+overlaps_heart_H3K9me3_om <- sum(overlapsAny(cardiac_granges, H3K9me3peak_om))
+# old female
+overlaps_heart_H3K9me3_of <- sum(overlapsAny(cardiac_granges, H3K9me3peak_of))
+```
+
+### Results and Interpretation
+
+```{r, fig.cap = "Cardiac Genes bound by H3K9me3", fig.pos = "h", message=FALSE, warning=FALSE}
+# Summary table
+summary_df2 <- data.frame(
+  Age = c("Young", "Young", "Old", "Old"),
+  Gender = c("Male", "Female", "Male", "Female"),
+  Total_Genes = rep(length(cardiac_granges), 4),
+  Overlapping_Genes = c(overlaps_heart_H3K9me3_ym, overlaps_heart_H3K9me3_yf, overlaps_heart_H3K9me3_om, overlaps_heart_H3K9me3_of)
+)
+
+# Plotting the overlaps
+ggplot(summary_df2, aes(x = Age, y = Overlapping_Genes, fill = Gender)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_text(aes(label = Overlapping_Genes), vjust = -0.5, position = position_dodge(0.9)) +
+  labs(x = "Age Group",
+       y = "Number of Overlapping Genes",) +
+  theme_minimal()
+```
+
+Focusing on age differences, a notable decrease of H3K9me3 in men with age can be seen in Figure 1. This observation aligns with the previously mentioned overall loss of heterochromatin during aging. It could indicate an increase in transcription of these cardiac muscle contraction genes. That, however, proves our hypothesis wrong and suggests a more complex interplay between the histone modifications and muscle contraction.\
+The largest difference can be seen in the young age group between males and females. Apparently, 69 out of 304 cardiac genes are bound by the histone modification H3K9me3 in young men. That is quite a big difference compared to the 8 genes in females, thereby highlighting sex differences. Considering that young men have a higher risk of heart diseases than young women, our findings could be a contributing factor [@SexHeart].   These initial findings lead us to further investigation into how different histone modifications might influence these heart related regions. Specifically, which biological processes are affected by them.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(epiwraps)
+  library(ggplot2)
+  library(rGREAT)# Gene Ontology enrichment among genomic regions
+  library(rtracklayer)
+})
+```
+
+## Clustering and Visualization - H3K4me1 and H3K27ac
+
+We hypothesize that the Histone modifications **H3K4me1 and H3K27ac** exhibit distinct clustering patterns in cardiac genes. Specifically, we propose that young females show higher levels of these modifications in regions linked to cardiac muscle development and maintenance, suggesting that females may have a greater capability to maintain heart cell health."\
+We look at genes with enhancers enriched in both **H3K4me1 and H3K27ac**. While H3K4me1 is a common histone modification present at open enhancers, the co-presence of H3K27ac indicates active enhancers [@activeEnhancers]. By assessing these domains, we obtain information about the indeed transcribed regions rather than just open regions that could potentially be transcribed.
+
+```{r, message=FALSE, warning=FALSE}
+# load Data
+H3K4me1peak_ym_CV <- read.table("H3K4me1peak_ym_CV", header = FALSE)
+H3K4me1peak_ym_gr <- GRanges(seqnames = H3K4me1peak_ym_CV$V1,
+                   ranges = IRanges(start = H3K4me1peak_ym_CV$V2, end = H3K4me1peak_ym_CV$V3), 
+                   score = H3K4me1peak_ym_CV$V5)
+
+H3K27acpeak_ym_CV <- read.table("H3K27acpeak_ym_CV", header = FALSE)
+H3K27acpeak_ym_gr <- GRanges(seqnames = H3K27acpeak_ym_CV$V1,
+                   ranges = IRanges(start = H3K27acpeak_ym_CV$V2, end = H3K27acpeak_ym_CV$V3), 
+                   score = H3K27acpeak_ym_CV$V5)
+
+H3K4me1peak_yf_CV <- read.table("H3K4me1peak_yf_CV", header = FALSE)
+H3K4me1peak_yf_gr <- GRanges(seqnames = H3K4me1peak_yf_CV$V1,
+                   ranges = IRanges(start = H3K4me1peak_yf_CV$V2, end = H3K4me1peak_yf_CV$V3), 
+                   score = H3K4me1peak_yf_CV$V5)
+
+H3K27acpeak_yf_CV <- read.table("H3K27acpeak_yf_CV", header = FALSE)
+H3K27acpeak_yf_gr <- GRanges(seqnames = H3K27acpeak_yf_CV$V1,
+                   ranges = IRanges(start = H3K27acpeak_yf_CV$V2, end = H3K27acpeak_yf_CV$V3), 
+                   score = H3K27acpeak_yf_CV$V5)
+```
+
+Again, we focus on the heart-related regions in the young male and female and overlap the data with the `cardiac_granges` from before.
+
+```{r, CV overlaps heart regions, message=FALSE, warning=FALSE}
+## Young Male
+overlaps_H3K4me1_ym <- findOverlaps(H3K4me1peak_ym_gr, cardiac_granges)
+# Extract the overlapping ranges from gr1 and gr2
+heartregion_H3K4me1_ym <- H3K4me1peak_ym_gr[unique(queryHits(overlaps_H3K4me1_ym))]
+
+overlaps_H3K27ac_ym <- findOverlaps(H3K27acpeak_ym_gr, cardiac_granges)
+heartregion_H3K27ac_ym <- H3K27acpeak_ym_gr[unique(queryHits(overlaps_H3K27ac_ym))]
+
+## Young Female
+overlaps_H3K4me1_yf <- findOverlaps(H3K4me1peak_yf_gr, cardiac_granges)
+heartregion_H3K4me1_yf <- H3K4me1peak_yf_gr[unique(queryHits(overlaps_H3K4me1_yf))]
+
+overlaps_H3K27ac_yf <- findOverlaps(H3K27acpeak_yf_gr, cardiac_granges)
+heartregion_H3K27ac_yf <- H3K27acpeak_yf_gr[unique(queryHits(overlaps_H3K27ac_yf))]
+```
+
+We convert and save the filtered GRanges object back to .bed-files.
+
+```{r convert to GRanges and save, message=FALSE, warning=FALSE}
+# Export the GRanges object to a BED file
+export(heartregion_H3K4me1_ym, "heartregion_H3K4me1_ym.bed")
+export(heartregion_H3K27ac_ym, "heartregion_H3K27ac_ym.bed")
+export(heartregion_H3K4me1_yf, "heartregion_H3K4me1_yf.bed")
+export(heartregion_H3K27ac_yf, "heartregion_H3K27ac_yf.bed")
+```
+
+```{r, message=FALSE, warning=FALSE}
+# we first import the peaks
+tracks <- list.files(pattern="bigWig$") # = binding intensities for all 3 CREBs
+peaks <- list.files(pattern="heartregion")
+#peaks_bed <- paste0(peaks, ".bed") # Add the ".bed" suffix to each filename
+
+# we first import the peaks
+peaks <- lapply(peaks, rtracklayer::import.bed)
+
+# we'll focus on the high-quality peaks
+peaks <- lapply(peaks, FUN=function(x) x[x$score>100])
+
+# we get the union of non-redundant regions
+regions <- reduce(unlist(GRangesList(peaks)))
+```
+
+Then we plot the activities of different Histone Modifications between Sexes
+
+```{r, fig.cap = "Activities of different Histone Modifications between Sexes", fig.pos = "h", message=FALSE, warning=FALSE}
+ese <- signal2Matrix(tracks, regions, extend=2000)
+ese2 <- ese[1:1000,] 
+plotEnrichedHeatmaps(ese2, cluster_rows = TRUE, show_row_dend=TRUE )
+```
+
+H3K27ac shows higher enrichment in young females, while H3K4me1 shows higher enrichment in young males in the analyzed regions. This could reflect underlying biological differences in chromatin states and gene regulation between the sexes.
+
+#### Clustering
+
+```{r, fig.cap = "Elbow-Plot", fig.pos = "h", message=FALSE, warning=FALSE}
+cl2 <- clusterSignalMatrices(ese, k=2:10)
+ggplot(cl2$varExplained, aes(k, varExplained)) + geom_line()
+```
+
+The elbow plot helps balancing between too few clusters (oversimplifying the data) and too many clusters (overfitting and complicating the interpretation). Here the pivoting point could be set on k=3, explaining roughly 85 % of the variance. This suggests that the clustering effectively reflects significant patterns or relationships in the data.
+
+```{r, message=FALSE, warning=FALSE}
+set.seed(123)  # to ensure that it gives the same results everytime
+cl <- clusterSignalMatrices(ese, k=3) # dividing data into k=4 clusters
+table(cl) # states how many items are in each cluster
+
+# to make sure the cluster labels stay associated with the corresponding regions/rows
+# even if we manipulate the object, put them inside the rowData of the object:
+rowData(ese)$cluster <- cl
+```
+
+Clusters 1 and 3 contain the majority of the regions.
+
+```{r, fig.cap = "Clustered Heatmap of Histone Modifications", fig.pos = "h", message=FALSE, warning=FALSE}
+mycolors <- c("1"="purple", "2"="blue", "3"="orange")
+plotEnrichedHeatmaps(ese, row_split="cluster", mean_color=mycolors, 
+                     colors=c("white","darkred"))
+```
+
+Plotting just the averages:
+
+```{r, fig.cap = "Clustered Averages of Histone Modifications", fig.pos = "h", message=FALSE, warning=FALSE}
+d <- meltSignals(ese, splitBy=cl)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line() + facet_wrap(~split)
+```
+
+Cluster 2 shows the strongest signal for H3K27as in young females. It also shows some activity in young males but considerably less so. H3K4me1 seems quite inactive in either group except for a small peak in young males shown in cluster 1.
+
+```{r, fig.cap = "Clustered Heatmap of Histone Modifications - globally scaled", fig.pos = "h", message=FALSE, warning=FALSE}
+plotEnrichedHeatmaps(ese, row_split = cl, scale_rows = "global")
+```
+
+In this plot the peak of H3K4me1 in young males appears more pronounced and sharp while the signal of H3K27ac in young females seems strong but rather broad.
+
+#### Enrichment Analysis
+
+To understand the biological significance of the regions in each cluster we identify which biological processes, molecular functions, cellular components, or pathways are overrepresented among the genes associated with these regions. This can provide insights into the functional roles and regulatory mechanisms of the histone modifications observed in each cluster and helo us with investigating our hypothesis. We focus on Clusters **1 and 2** to investigate the peaks of H3K4me1 in young males as well as \_\_\_\_\_\_\_\_\_
+
+#### Cluster 1
+
+```{r, fig.cap = "Enrichment Analysis - Cluster 1", fig.pos = "h", message=FALSE, warning=FALSE}
+# we first split the regions by cluster:
+split_regions <- split(rowRanges(ese), rowData(ese)$cluster)
+res1 <- great(split_regions[["1"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp1 <- getEnrichmentTables(res1)
+ggplot(head(bp1,15), aes(fold_enrichment, reorder(description, p_adjust), 
+                        size=observed_region_hits, color=-log10(p_adjust))) + 
+  geom_point() + scale_color_viridis_c()
+```
+
+The enrichment analysis for Cluster 1 reveals that regions in this cluster are mostly associated with synaptic function, sensory perception, muscle differentiation, ion transport, and immune system differentiation. Considering that in this cluster 1 we previously observed a small but sharp peak for H3K4me1 in young males and also small but broad peaks for all other groups, this analysis does not allow for much interpretation. Another limitation of this enrichment analysis are the high p-values, which leave us with a quite low statistical significance.
+
+```{r, fig.cap = "Enrichment Analysis - Cluster 2", fig.pos = "h", message=FALSE, warning=FALSE}
+res2 <- great(split_regions[["2"]], gene_sets="GO:BP", tss_source="hg38",
+             background=regions, cores=2)
+bp2 <- getEnrichmentTables(res2)
+ggplot(head(bp2,15), aes(fold_enrichment, reorder(description, p_adjust), 
+                        size=observed_region_hits, color=-log10(p_adjust))) + 
+  geom_point() + scale_color_viridis_c()
+```
+
+The enrichment analysis for Cluster 2 reveals associations with key biological processes related to cell cycle regulation, DNA damage response, autophagy, and immune responses. These regions play essential roles in ensuring proper cell division, maintaining genomic integrity, managing cellular stress, and activating immune cells. Taking into account that Cluster 2 showed a remarkably bigger peak of H3K27ac in females compared to males, we could deduct a potentially better capacity for these mechanisms ensuring proper cell division.
+
+## Gene Association - H3K4me1
+
+This study focuses on the differential H3K4me1 peaks in left ventricular (LV) tissues from young and old individuals. We hypothesize that these differential peaks are associated with genes involved in oxidative stress response and energy metabolism, implicating age-related enhancer changes in declining mitochondrial function and increased oxidative damage. Such changes are proposed to contribute to age-related cardiac functional decline.\
+To test this hypothesis, we performed a comprehensive analysis involving gene expression profiling, heatmap visualization, Gene Ontology (GO) enrichment analysis, and MA plotting. By examining the expression patterns of key genes and their associated biological processes, we aim to elucidate the molecular mechanisms underlying age-related changes in cardiac function.
+
+```{r, message=FALSE, warning=FALSE}
+# Preparing the genome sequence file (here just using a subset)
+genome <- BSgenome.Hsapiens.UCSC.hg38::BSgenome.Hsapiens.UCSC.hg38
+seqlevelsStyle(genome) <- "UCSC"
+
+motifs <- MotifDb::query(MotifDb, c("HOCOMOCOv11-core", "Hsapiens"))
+motifs <- do.call(TFBSTools::PWMatrixList, setNames(
+           universalmotif::convert_motifs(motifs, class="TFBSTools-PWMatrix"),
+           mcols(motifs)$geneSymbol))
+```
+
+```{r, message=FALSE, warning=FALSE}
+# load data
+H3K4me1peak_om <- rtracklayer::import("data/H3K4me1peak_om.bed.gz", 
+                                      format = "narrowPeak")
+H3K4me1peak_ym <- rtracklayer::import("data/H3K4me1peak_ym.bed.gz", 
+                                      format = "narrowPeak")
+H3K4me1peak_of <- rtracklayer::import("data/H3K4me1peak_of.bed.gz", 
+                                      format = "narrowPeak")
+H3K4me1peak_yf <- rtracklayer::import("data/H3K4me1peak_yf.bed.gz", 
+                                      format = "narrowPeak")
+
+# Get a list of BAM files
+bams <- c("data/H3K4me1bam_om", "data/H3K4me1bam_ym", "data/H3K4me1bam_of", 
+          "data/H3K4me1bam_yf")
+names(bams) <- c("OldMale", "YoungMale", "OldFemale", "YoungFemale")
+
+# Combine all peaks into a single GRanges object
+all_peaks <- c(H3K4me1peak_om, H3K4me1peak_ym, H3K4me1peak_of, H3K4me1peak_yf)
+
+#Chose the Chromosome
+chromosome <- "chr1"
+
+# Combine all peaks into a single GRanges object for the specified chromosome
+all_peaks <- all_peaks[seqnames(all_peaks) == chromosome]
+
+# Resize peaks to a standard size
+all_peaks <- resize(all_peaks, width=300, fix="center")
+```
+
+To ensure that the data used for differential analysis is free from GC content bias, we utilized the chromVAR::addGCBias function to assess the GC content distribution across all peaks. The resulting histogram shows the frequency of peaks with varying GC content.
+
+```{r, fig.cap = "GC Bias Distribution", fig.pos = "h", message=FALSE, warning=FALSE}
+# Resize peaks to a standard size
+all_peaks <- resize(all_peaks, width=300, fix="center")
+
+# Get counts for the combined set of peaks
+se <- chromVAR::getCounts(alignment_files = bams, peaks = all_peaks, 
+                          paired = FALSE)
+
+# Assign conditions to samples
+colData(se)$condition <- c("OldMale", "YoungMale", "OldFemale", "YoungFemale")
+row.names(se) <- as.character(granges(se))
+
+se <- chromVAR::addGCBias(se, genome=genome)
+hist(rowData(se)$bias, main = "GC Bias Distribution", xlab = "GC Bias", 
+     col = "blue")
+```
+
+As seen in the histogram, the GC bias distribution approximates a normal distribution, with the majority of peaks centered around a GC content of 0.5. This indicates that there is no significant skew towards GC-rich or GC-poor regions in our data. Therefore, we can confidently proceed with differential analysis, knowing that GC content bias has been effectively accounted for and is not likely to influence our results.
+
+```{r, message=FALSE, warning=FALSE}
+moi <- motifmatchr::matchMotifs(motifs, subject=se, genome=genome)
+# ensure reproducibility
+set.seed(1234)
+# for each peak, we identify similar peaks as background
+bg <- chromVAR::getBackgroundPeaks(se, niterations=1000)
+
+# for each motif, we computed per-sample deviations relative to the background
+dev <- chromVAR::computeDeviations(object = se, annotations=moi,
+                                   background_peaks=bg)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Assign conditions to samples
+colData(se)$condition <- factor(c("Old", "Young", "Old", "Young"))
+row.names(se) <- as.character(granges(se))
+
+# Differential analysis with edgeR
+dds <- DGEList(counts = assay(se), group = colData(se)$condition)
+dds <- calcNormFactors(dds)
+
+# Estimate dispersion
+dds <- estimateCommonDisp(dds)
+dds <- estimateTagwiseDisp(dds)
+
+# Perform exact test for differential expression
+et <- as.data.frame(topTags(exactTest(dds), Inf))
+```
+
+```{r, fig.cap = "MA Plot: Old vs Young", fig.pos = "h", message=FALSE, warning=FALSE}
+# Plot MA plot for Old vs Young
+plotMD(et, column=1, main="MA Plot: Old vs Young", ylim=c(-5, 5))
+abline(h = c(-1, 1), col = "green")
+```
+
+### Interpretation of MA Plot Age
+
+The MA plot illustrates the relationship between average expression levels and the differences in expression between Old and Young conditions. The x-axis represents the average log-expression level of each feature across both conditions, while the y-axis shows the log-fold change, or difference in expression levels, between Old and Young conditions.
+
+Most points are clustered between -1 and 1.5 on the x-axis, indicating that the majority of features have low to moderate expression levels. On the y-axis, the values range between -4 and 0, suggesting that most features exhibit a decrease in expression in Old tissues compared to Young tissues.
+
+The clustering of points within these ranges indicates a general trend of decreased expression in old tissues. This supports the hypothesis that age-related enhancer changes contribute to a decline in gene expression. Such a decrease in expression could impact cardiac function through mechanisms related to oxidative stress and metabolic pathways.
+
+```{r, message=FALSE, warning=FALSE}
+# Create a GRanges object from the peak identifiers in et
+peak_ranges <- GRanges(seqnames = sub(":.*", "", rownames(et)),
+                       ranges = IRanges(start = as.numeric(sub(".*:(.*)-.*", 
+                                                               "\\1", 
+                                                               rownames(et))),
+                                        end = as.numeric(sub(".*-", "",
+                                                             rownames(et)))))
+
+# Annotate the peaks to gene symbols using TxDb and org.Hs.eg.db
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+peak_annotation <- annotatePeak(peak_ranges, TxDb = txdb, 
+                                annoDb = "org.Hs.eg.db")
+```
+
+```{r, fig.cap = "ChromVar-Analysis Heatmap", fig.pos = "h", message=FALSE, warning=FALSE}
+# Extract the gene symbols from the annotation
+annotated_genes <- as.data.frame(peak_annotation)$SYMBOL
+
+# Filter out NA values
+annotated_genes <- annotated_genes[!is.na(annotated_genes)]
+
+# Ensure the annotated genes are present in the dev object
+top_features <- annotated_genes[annotated_genes %in% rownames(dev)]
+
+# Assign annotation colors
+metadata(dev)$anno_colors <- list(condition = c(OldMale = "gold", 
+                                                YoungMale = "orange", 
+                                                OldFemale = "pink", 
+                                                YoungFemale = "skyblue"))
+
+# Generate the heatmap plot
+sechm::sechm(dev, features = top_features, assayName = "z", 
+             top_annotation = c("condition"))
+```
+
+### Interpretation of Heatmap
+
+The heatmap visualizes the z-scores for the most relevant genes across four conditions: Old Female, Old Male, Young Female, and Young Male. \
+MEF2D shows very low expression in Young Males and very high expression in the other three categories. Similarly, FOXJ3 has low expression in Young Males and high expression in the other groups. The Young Male group also tends to have more yellow shades, indicating upregulated genes such as MTF1, NR5A2, PBX1, USF1, RUNX3, and JUN.
+
+In contrast, the Old Male group has more dark tones, indicating minimal upregulation or downregulation. The female groups (Old Female and Young Female) display similar expression patterns to each other and the Old Male group, showing slight variances. They generally have a few darker shades compared to the Young Male group. The greater differences observed in the Young Male group compared to the Young Female group are likely due to the varying age gaps: 39 years between the males (73-34) and 13 years between the females (59-46). The 46-year-old female likely has gene expression patterns more similar to the older group than the younger group.
+
+To further validate the relevance of these genes, a functional enrichment analysis can be performed to determine if these genes are significantly associated with known pathways of oxidative stress response and energy metabolism.
+
+```{r, fig.cap = "Enrichment Analysis - Chromosome 1, H3K4me1", fig.pos = "h", message=FALSE, warning=FALSE}
+# Perform GREAT analysis on significant differential peaks
+res <- great(peak_ranges, gene_sets="GO:BP", tss_source="hg38", 
+             background=all_peaks, cores=2)
+
+# Retrieve the enrichment tables
+bp <- getEnrichmentTables(res)
+
+# Visualize the results
+ggplot(head(bp, 15), aes(x = fold_enrichment, y = reorder(description, p_adjust), 
+                         size = observed_region_hits, color=-log10(p_adjust))) + 
+  geom_point() + 
+  scale_color_viridis_c() + 
+  labs(x = "Fold Enrichment", y = "GO Biological Process", 
+       size = "Observed Region Hits", color = "-log10(p-adjust)") +
+  theme(axis.text.y = element_text(size = 10))
+```
+
+### Interpretation of GO Enrichment analysis
+
+This plot visualizes the Gene Ontology (GO) enrichment analysis for Biological Processes. Notably, processes such as "leukocyte differentiation," "lymphocyte differentiation," "positive regulation of programmed cell death," and "positive regulation of apoptotic process" show significant fold enrichment. This suggests that these processes are highly overrepresented among the regions of interest, which are the H3K4me1 peaks on chromosome 1.
+
+Additionally, "Mitochondrion Organization" and "Mitochondrial Membrane Organization" also exhibit high fold enrichment. These processes are directly relevant to oxidative stress because mitochondria are the primary site for reactive oxygen species (ROS) production. Proper mitochondrial organization and integrity are essential for maintaining cellular energy balance and preventing excessive ROS generation.
+
+Processes like "Positive Regulation of Apoptotic Process" and "Programmed Cell Death" are indirectly related to oxidative stress, as ROS can induce apoptosis and programmed cell death, which are cellular responses to oxidative damage.
+
+### Conclusion
+
+Our findings support the hypothesis that age-related enhancer changes, marked by differential H3K4me1 peaks, play a crucial role in the regulation of genes involved in oxidative stress response and energy metabolism. The differential expression of genes like MEF2D and FOXJ3, along with the notable enrichment of biological processes related to apoptosis and cell differentiation, underscores the impact of oxidative damage and mitochondrial dysfunction in age-related cardiac functional decline.The analysis could be improved by taking data from people with a larger age gap, thereby providing a more robust understanding of how enhancer dynamics and associated gene regulation evolve over a broader age spectrum.
+
+## Co-Binding Analysis
+### Co-Binding Analysis - H3K9me3 and CTCF
+
+Histone modifications, such as H3K9me3 (histone H3 lysine 9 trimethylation), play a critical role in regulating gene expression by modulating chromatin structure and accessibility. Transcription factors, like CTCF (CCCTC-binding factor), interact with these histone modifications to coordinate the repression or activation of gene expression at specific genomic regions. Co-binding of CTCF with histone modifications at promoter regions is essential for maintaining the precise regulation of cardiac genes.
+
+We hypothesize that in aged LV tissue, the co-binding of H3K9me3 with cardiac transcription factors such as CTCF at specific promoter regions is reduced compared to young tissue. This reduction reflects a loss of coordinated repression that could adversely affect cardiac function. Additionally, we propose that these changes in co-binding patterns may vary between male and female subjects, potentially contributing to sex-specific differences in cardiac aging.
+
+To investigate this hypothesis, we conducted a co-binding analysis to examine the interaction between CTCF and H3K9me3 at specific genomic regions. This analysis aimed to identify differences in co-binding patterns between young and aged LV tissue and between male and female subjects. By comparing the number and distribution of co-binding sites, we sought to understand how aging and sex influence the coordinated regulation of cardiac genes.
+
+```{r, message=FALSE, warning=FALSE}
+# load CTCF data
+CTCF_om <- read.table("data/CTCF_om", header = FALSE)
+CTCF_om <- GRanges(seqnames = CTCF_om$V1,
+                   ranges = IRanges(start = CTCF_om$V2, end = CTCF_om$V3))
+CTCF_ym <- read.table("data/CTCF_ym", header = FALSE)
+CTCF_ym <- GRanges(seqnames = CTCF_ym$V1,
+                   ranges = IRanges(start = CTCF_ym$V2, end = CTCF_ym$V3))
+CTCF_of <- read.table("data/CTCF_of", header = FALSE)
+CTCF_of <- GRanges(seqnames = CTCF_of$V1,
+                   ranges = IRanges(start = CTCF_of$V2, end = CTCF_of$V3))
+CTCF_yf <- read.table("data/CTCF_yf", header = FALSE)
+CTCF_yf <- GRanges(seqnames = CTCF_yf$V1,
+                   ranges = IRanges(start = CTCF_yf$V2, end = CTCF_yf$V3))
+```
+
+```{r, fig.cap = "Overlaps CTCF/H3K9me3", fig.pos = "h", message=FALSE, warning=FALSE}
+# Overlap CTCF with H3K9me3
+overlap_om_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_om, H3K9me3peak_om))
+overlap_ym_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_ym, H3K9me3peak_ym))
+overlap_of_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_of, H3K9me3peak_of))
+overlap_yf_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_yf, H3K9me3peak_yf))
+
+# Convert overlaps to GRanges objects
+overlap_om_CTCF_H3K9me3_gr <- pintersect(CTCF_om[queryHits(overlap_om_CTCF_H3K9me3)], 
+                                         H3K9me3peak_om[subjectHits
+                                                        (overlap_om_CTCF_H3K9me3)])
+overlap_ym_CTCF_H3K9me3_gr <- pintersect(CTCF_ym[queryHits(overlap_ym_CTCF_H3K9me3)], 
+                                         H3K9me3peak_ym[subjectHits
+                                                        (overlap_ym_CTCF_H3K9me3)])
+overlap_of_CTCF_H3K9me3_gr <- pintersect(CTCF_of[queryHits(overlap_of_CTCF_H3K9me3)], 
+                                         H3K9me3peak_of[subjectHits
+                                                        (overlap_of_CTCF_H3K9me3)])
+overlap_yf_CTCF_H3K9me3_gr <- pintersect(CTCF_yf[queryHits(overlap_yf_CTCF_H3K9me3)], 
+                                         H3K9me3peak_yf[subjectHits
+                                                        (overlap_yf_CTCF_H3K9me3)])
+
+# Combine all overlaps into one GRanges object
+all_overlaps <- c(overlap_om_CTCF_H3K9me3_gr, overlap_ym_CTCF_H3K9me3_gr, 
+                  overlap_of_CTCF_H3K9me3_gr, overlap_yf_CTCF_H3K9me3_gr)
+
+# Count overlaps
+count_om <- length(unique(queryHits(overlap_om_CTCF_H3K9me3)))
+count_ym <- length(unique(queryHits(overlap_ym_CTCF_H3K9me3)))
+count_of <- length(unique(queryHits(overlap_of_CTCF_H3K9me3)))
+count_yf <- length(unique(queryHits(overlap_yf_CTCF_H3K9me3)))
+
+# Statistical comparison
+counts <- data.frame(
+  Group = c("Old Male", "Young Male", "Old Female", "Young Female"),
+  Count = c(count_om, count_ym, count_of, count_yf))
+
+# Plot the results
+ggplot(counts, aes(x = Group, y = Count, fill = Group)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Co-binding of CTCF with H3K9me3",
+       x = "Group", y = "Number of Co-binding Sites")
+```
+
+#### Interpretation of Co-binding sites
+
+From the graph, it is evident that the young male group exhibits the highest number of co-binding sites of CTCF with H3K9me3, significantly surpassing the other groups. Old males have the second-highest number of co-binding sites, while old females and young females show relatively low levels of co-binding, with young females having the least.\
+The observed decline in co-binding sites of CTCF with H3K9me3 in older individuals supports our hypothesis that in aged left ventricular (LV) tissue, there is a reduction in the co-binding of H3K9me3 with cardiac transcription factors at specific promoter regions. This reduction likely reflects a loss of coordinated repression, which could impact gene regulation and ultimately affect cardiac function. Additionally, the low number of co-binding sites in females compared to males highlights potential sex-specific differences in chromatin organization and gene regulation, suggesting that hormonal or genetic factors might influence these interactions differently in male and female cardiac tissue.
+
+#### Annotation and Enrichment analysis
+
+Then an annotation and enrichment analysis was conducted to determine the specific genomic regions where the peaks co-bound to and to identify the biological functions influenced by these interactions. This approach allowed for the pinpointing of pathways and processes that might be affected by the co-binding of CTCF and H3K9me3, shedding light on the regulatory mechanisms at play in different age and sex groups.
+
+```{r, message=FALSE, warning=FALSE}
+# Create and annotate and enrich function
+annotate_and_enrich <- function(overlap_gr) {
+  # Annotate peaks to genes
+  peakAnno <- annotatePeak(overlap_gr, tssRegion = c(-3000, 3000), 
+                           TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene, 
+                           annoDb = "org.Hs.eg.db")
+  # Perform GO enrichment analysis
+  go <- enrichGO(gene = as.data.frame(peakAnno)$geneId,
+                 OrgDb = org.Hs.eg.db,
+                 keyType = "ENTREZID",
+                 ont = "ALL",
+                 pAdjustMethod = "BH",
+                 pvalueCutoff = 0.01,
+                 qvalueCutoff = 0.05)
+  go_df <- as.data.frame(go)
+  # Plot results
+  barplot(go, showCategory = 10)}
+```
+
+#### Interpretation of GO Enrichment Results
+
+```{r, fig.cap = "Enrichment Analysis - Overlaps CTCF/H3K9me3, Young Males", fig.pos = "h", message=FALSE, warning=FALSE}
+# List of overlaps to process
+overlaps_list_ym <- list(overlap_ym_CTCF_H3K9me3_gr)
+# Apply the function to each overlap
+lapply(overlaps_list_ym, annotate_and_enrich)
+```
+
+FIGURE ___ shows the enriched biological processes for young males. The analysis of young males' data reveals significant enrichment in biological processes related to cell adhesion and synapse organization. Key processes include: Homophilic cell adhesion via plasma membrane adhesion molecules (GO:0007156), Cell-cell adhesion via plasma-membrane adhesion molecules (GO:0098742), Synapse organization (GO:0050808) and Calcium-dependent cell-cell adhesion (GO:0016339).
+These findings suggest that the co-binding of CTCF and H3K9me3 in young males predominantly impacts cellular adhesion mechanisms and synaptic organization, which are essential for tissue integrity and neuronal communication. This indicates a strong influence of these co-binding events on maintaining cellular structure and function in the nervous system.
+
+```{r, fig.cap = "Enrichment Analysis - Overlaps CTCF/H3K9me3, Young Females", fig.pos = "h", message=FALSE, warning=FALSE}
+# List of overlaps to process
+overlaps_list_yf <- list(overlap_yf_CTCF_H3K9me3_gr)
+# Apply the function to each overlap
+lapply(overlaps_list_yf, annotate_and_enrich)
+```
+
+FIGURE ___ depicts the enriched biological process for young females, highlighting the "cornified envelope" process (GO:0001533). This indicates that the co-binding of CTCF and H3K9me3 in young females may specifically affect this biological pathway. The cornified envelope is a structure in the outermost layer of the skin that is essential for its barrier function. Finding this enrichment suggests that there may be unique regulatory mechanisms involving CTCF and H3K9me3 that are pertinent to the skin or related epithelial tissues in young females. Given that the count for this process is only 1, it signifies a single gene associated with this pathway, which highlights the specificity of the observed enrichment in the young female group.
+
+Observations on Older Patients
+
+Older patients' data were not singularly used for enrichment plots as they did not show any significant results. This lack of enrichment could indicate that the co-binding of CTCF with H3K9me3 in older individuals does not significantly influence the same biological processes as seen in younger individuals, or it could reflect a more general decrease in the robustness of these interactions with age.
+
+#### Conclusion
+
+The significant enrichment in cell adhesion and synapse-related processes in young males and the specific enrichment in the cornified envelope process in young females suggest that CTCF and H3K9me3 co-binding affects different pathways based on sex and age. These findings support the hypothesis that aging and sex influence the molecular mechanisms of gene regulation via CTCF and H3K9me3 co-binding, with young individuals showing more pronounced and varied biological process enrichment.
+
+### Co-Binding Analysis - H3K9me3 and CTCF with Estrogen Motifs
+
+We hypothesize that females have distinct transcription factor co-binding patterns at accessible chromatin regions, particularly involving estrogen receptor motifs, which influence gene regulation in a sex-specific manner. To test this hypothesis, we conducted a comprehensive co-binding analysis to examine the interaction between CTCF and H3K9me3 at specific genomic regions. This analysis aimed to identify differences in co-binding patterns between young and aged LV tissues and between male and female subjects.
+
+Our approach involved extracting co-binding sites, performing motif analysis for estrogen receptors, calculating overlaps between motifs and chromatin regions, and visualizing the results. By comparing the number and distribution of co-binding sites, we sought to uncover how aging and sex influence the coordinated regulation of cardiac genes, potentially affecting genomic accessibility and transcriptional activity.
+
+#### Co-binding Sites and Motif Analysis 
+
+A motif analysis was conducted to examine the binding patterns of transcription factors at accessible chromatin regions. This analysis aimed to identify differences in binding patterns between young and aged individuals as well as between male and female subjects. Specifically, the focus was on estrogen receptor motifs to uncover sex-specific regulatory mechanisms. By comparing the number and distribution of these motifs, insights into how aging and sex influence gene regulation through transcription factor binding were sought, potentially affecting genomic accessibility and transcriptional activity.
+
+```{r, message=FALSE}
+#load the data
+
+ATACpeak_om <- read.table("data/ATACpeak_om", header = FALSE)
+ATACpeak_om <- GRanges(seqnames = ATACpeak_om$V1,
+                   ranges = IRanges(start = ATACpeak_om$V2, end = ATACpeak_om$V3))
+ATACpeak_ym <- read.table("data/ATACpeak_ym", header = FALSE)
+ATACpeak_ym <- GRanges(seqnames = ATACpeak_ym$V1,
+                   ranges = IRanges(start = ATACpeak_ym$V2, end = ATACpeak_ym$V3))
+ATACpeak_of <- read.table("data/ATACpeak_of", header = FALSE)
+ATACpeak_of <- GRanges(seqnames = ATACpeak_of$V1,
+                   ranges = IRanges(start = ATACpeak_of$V2, end = ATACpeak_of$V3))
+ATACpeak_42yf <- read.table("data/ATACpeak_42yf", header = FALSE)
+ATACpeak_42yf <- GRanges(seqnames = ATACpeak_42yf$V1,
+                   ranges = IRanges(start = ATACpeak_42yf$V2, end = ATACpeak_42yf$V3))
+```
+
+```{r, message=FALSE}
+# Extract cobinding sites of CTCF with H3K9me3
+#overlap_om_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_om, H3K9me3peak_om))
+#overlap_ym_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_ym, H3K9me3peak_ym))
+#overlap_of_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_of, H3K9me3peak_of))
+#overlap_yf_CTCF_H3K9me3 <- unique(findOverlaps(CTCF_yf, H3K9me3peak_yf))
+
+# Extract overlapping regions as GRanges objects
+overlap_regions_om <- pintersect(CTCF_om[queryHits(overlap_om_CTCF_H3K9me3)], 
+                                 H3K9me3peak_om[subjectHits(overlap_om_CTCF_H3K9me3)])
+overlap_regions_ym <- pintersect(CTCF_ym[queryHits(overlap_ym_CTCF_H3K9me3)], 
+                                 H3K9me3peak_ym[subjectHits(overlap_ym_CTCF_H3K9me3)])
+overlap_regions_of <- pintersect(CTCF_of[queryHits(overlap_of_CTCF_H3K9me3)], 
+                                 H3K9me3peak_of[subjectHits(overlap_of_CTCF_H3K9me3)])
+overlap_regions_yf <- pintersect(CTCF_yf[queryHits(overlap_yf_CTCF_H3K9me3)], 
+                                 H3K9me3peak_yf[subjectHits(overlap_yf_CTCF_H3K9me3)])
+
+# Load motifs from MotifDb
+human_motifs <- MotifDb::query(MotifDb, "Hsapiens")
+estrogen_motifs <- MotifDb::query(MotifDb, "ESR1")
+selected_motif <- estrogen_motifs[["Hsapiens-jaspar2022-ESR1-MA0112.3"]]
+motif <- convert_motifs(selected_motif, class="TFBSTools-PWMatrix")
+
+# Find motifs in ATAC-seq peaks
+motif_hits_om <- motifmatchr::matchMotifs(motif, ATACpeak_om, 
+                                          genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                          out="positions")
+motif_hits_ym <- motifmatchr::matchMotifs(motif, ATACpeak_ym, 
+                                          genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                          out="positions")
+motif_hits_of <- motifmatchr::matchMotifs(motif, ATACpeak_of, 
+                                          genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                          out="positions")
+motif_hits_yf <- motifmatchr::matchMotifs(motif, ATACpeak_42yf, 
+                                          genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                          out="positions")
+
+# Find motifs in ChIP-seq peaks
+motif_hits_overlap_om <- motifmatchr::matchMotifs(motif, overlap_regions_om, 
+                                                  genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                                  out="positions")
+motif_hits_overlap_ym <- motifmatchr::matchMotifs(motif, overlap_regions_ym, 
+                                                  genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                                  out="positions")
+motif_hits_overlap_of <- motifmatchr::matchMotifs(motif, overlap_regions_of, 
+                                                  genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                                  out="positions")
+motif_hits_overlap_yf <- motifmatchr::matchMotifs(motif, overlap_regions_yf, 
+                                                  genome = BSgenome.Hsapiens.UCSC.hg38, 
+                                                  out="positions")
+
+# Calculate overlaps
+overlap_om <- sum(overlapsAny(ATACpeak_om, motif_hits_om))
+overlap_ym <- sum(overlapsAny(ATACpeak_ym, motif_hits_ym))
+overlap_of <- sum(overlapsAny(ATACpeak_of, motif_hits_of))
+overlap_yf <- sum(overlapsAny(ATACpeak_42yf, motif_hits_yf))
+
+overlap_cobinding_om <- sum(overlapsAny(overlap_regions_om, motif_hits_overlap_om))
+overlap_cobinding_ym <- sum(overlapsAny(overlap_regions_ym, motif_hits_overlap_ym))
+overlap_cobinding_of <- sum(overlapsAny(overlap_regions_of, motif_hits_overlap_of))
+overlap_cobinding_yf <- sum(overlapsAny(overlap_regions_yf, motif_hits_overlap_yf))
+
+# Create a data frame from the overlap counts ATAC
+overlap_data <- data.frame(
+  Group = c("Older Males", "Younger Males", "Older Females", "Younger Females"),
+  Overlaps = c(overlap_om, overlap_ym, overlap_of, overlap_yf)
+)
+
+# Create a data frame from the overlap counts CHIP
+cobinding_overlap_data <- data.frame(
+  Group = c("Older Males", "Younger Males", "Older Females", "Younger Females"),
+  Overlaps = c(overlap_cobinding_om, overlap_cobinding_ym, overlap_cobinding_of, 
+               overlap_cobinding_yf))
+```
+
+```{r, fig.cap = "ESR1 Motif Overlaps in ATAC-seq Peaks", fig.pos = "h", message=FALSE}
+# Plot the Graphs
+p1 <- ggplot(overlap_data, aes(x = Group, y = Overlaps)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Motif Overlaps in ATAC-seq Peaks", x = "Group", 
+       y = "Count of Overlaps") + theme_minimal()
+print(p1)
+```
+
+FIGURE___ shows motif overlap counts in ATAC-seq peaks across different groups. Older Females have the highest number of overlaps, indicating greater chromatin accessibility. This aligns with established knowledge that estrogen receptor activity is more pronounced in females and crucial in regulating gene expression. Younger Males follow in motif overlaps, while Older Males and Younger Females have moderate and lowest counts, respectively.\
+Even though these results might be counterintuitive at first, one has to consider that there are several biological and technical factors that could explain this, such as biological variation, cell type composition and hormonal differences. Estrogen levels fluctuates significantly in females depending on their menstrual cycle, which could affect chromatin accessibility.[@MenstrualCycle]
+
+```{r, fig.cap = "ESR1 Motif Overlaps in Co-binding Regions (CTCF/H3K9me3)", fig.pos = "h", message=FALSE}
+p2 <- ggplot(cobinding_overlap_data, aes(x = Group, y = Overlaps)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  labs(title = "Motif Overlaps in Co-binding Regions (CTCF and H3K9me3)", 
+       x = "Group", y = "Count of Overlaps") + theme_minimal()
+print(p2)
+```
+
+FIGURE___ highlights motif overlaps in regions where CTCF and H3K9me3 co-bind. Younger Males exhibit significantly higher overlaps compared to Older Males and both Older and Younger Females. The absence of overlaps in females is likely due to estrogen receptor activity, which prefers accessible chromatin regions over repressive ones marked by H3K9me3. [@H3K9me3Targets] This sex-specific difference in transcription factor binding patterns underscores the unique regulatory mechanisms driven by estrogen in females.
+
+#### Conclusion
+
+Our findings partially support the hypothesis that females exhibit distinct transcription factor co-binding patterns involving estrogen receptor motifs. However, the evidence is not entirely conclusive, as the observed differences could also be influenced by other factors such as sample size, individual biological variation, and technical aspects of the analysis.\
+To draw more definitive conclusions, future studies should involve larger cohorts with diverse age groups and genders. This will help validate the observed trends and provide a more comprehensive understanding of the molecular mechanisms underlying sex-specific gene regulation.
+
+# Conclusion
+
+#### Limitations
+
+Of course, the results must be treated with caution as a sample size of 1 cannot give reliable information. Also, worth mentioning is that our studies are solely based on the general consensus of the literature stating that women are protected from heart diseases by their sex hormones as well as that the risk of heart diseases increases with age. Meaning that we did not work with samples from affected but from healthy people. This extra layer of extrapolation further decreases the meaningfulness.
+
+\clearpage
+# Bibliography
